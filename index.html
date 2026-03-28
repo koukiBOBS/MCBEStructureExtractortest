@@ -31,10 +31,6 @@
             border-radius: 30px;
             font-size: 0.8rem;
             cursor: pointer;
-            transition: background 0.2s;
-        }
-        .lang-btn:hover {
-            background: #cbdcd9;
         }
         .tab-bar {
             display: flex;
@@ -90,7 +86,6 @@
             font-weight: 500;
         }
         .custom-file-input {
-            position: relative;
             display: flex;
             align-items: center;
             gap: 10px;
@@ -103,8 +98,6 @@
             padding: 8px 16px;
             border-radius: 30px;
             cursor: pointer;
-            font-size: 0.9rem;
-            white-space: nowrap;
         }
         .custom-file-name {
             background: #f8f9fa;
@@ -156,27 +149,11 @@
             color: white;
             text-decoration: none;
             border-radius: 30px;
-            font-size: 0.9rem;
         }
         .small-note {
             font-size: 0.75rem;
             color: #666;
             margin-top: 8px;
-        }
-        .structure-list {
-            margin-top: 10px;
-            max-height: 200px;
-            overflow-y: auto;
-            background: #f5f5f5;
-            border-radius: 12px;
-            padding: 8px;
-            font-size: 0.8rem;
-        }
-        .structure-item {
-            padding: 4px 8px;
-            border-bottom: 1px solid #ddd;
-            display: flex;
-            justify-content: space-between;
         }
     </style>
 </head>
@@ -280,7 +257,12 @@
             validateStructures: "正在验证结构文件...",
             validStructure: "有效，GZip 压缩 NBT，大小 {size} KB",
             invalidStructure: "无效，文件头不是 GZip 格式，可能损坏",
-            structureTooSmall: "文件过小 ({size} 字节)，可能损坏"
+            structureTooSmall: "文件过小 ({size} 字节)，可能损坏",
+            analyzing: "深入分析",
+            decompressedHeader: "解压后数据头 (前16字节)",
+            nbtRootHint: "NBT 根标签名 (期望 'structure'):",
+            likelyValid: "看起来像是有效的 NBT 数据（包含常见标签）",
+            likelyInvalid: "数据可能不完整或格式错误"
         },
         en: {
             toggleBtn: "中文",
@@ -321,14 +303,18 @@
             validateStructures: "Validating structure files...",
             validStructure: "Valid, GZip compressed NBT, size {size} KB",
             invalidStructure: "Invalid, file header not GZip, possibly corrupted",
-            structureTooSmall: "File too small ({size} bytes), possibly corrupted"
+            structureTooSmall: "File too small ({size} bytes), possibly corrupted",
+            analyzing: "Deep Analysis",
+            decompressedHeader: "Decompressed data header (first 16 bytes)",
+            nbtRootHint: "NBT root tag name (expected 'structure'):",
+            likelyValid: "Looks like valid NBT data (contains common tags)",
+            likelyInvalid: "Data may be incomplete or malformed"
         }
     };
 
     let currentLang = 'zh';
     let i18n = translations.zh;
 
-    // 检测IP语言
     async function detectLanguageByIP() {
         try {
             const response = await fetch('https://ipapi.co/json/');
@@ -342,14 +328,11 @@
         }
     }
 
-    // 应用语言
     function applyLanguage(lang) {
         currentLang = lang;
         i18n = translations[lang];
-        
         const toggleBtn = document.getElementById('langToggleBtn');
         if (toggleBtn) toggleBtn.innerText = i18n.toggleBtn;
-        
         document.getElementById('titleExtract').innerText = i18n.extractTitle;
         document.getElementById('descExtract').innerHTML = i18n.extractDesc;
         document.getElementById('extractFileLabel').innerText = i18n.extractFileLabel;
@@ -361,24 +344,19 @@
         document.getElementById('injectBtn').innerText = i18n.injectBtn;
         document.getElementById('extractNote').innerText = i18n.noteExtract;
         document.getElementById('injectNote').innerText = i18n.noteInject;
-        
         document.getElementById('tabExtractBtn').innerText = lang === 'zh' ? '提取结构' : 'Extract';
         document.getElementById('tabInjectBtn').innerText = lang === 'zh' ? '注入结构' : 'Inject';
-        
         document.getElementById('extractFileBtn').innerText = i18n.selectFile;
         document.getElementById('worldFileBtn').innerText = i18n.selectFile;
         document.getElementById('structureFileBtn').innerText = i18n.selectFile;
-        
         updateExtractFileNameDisplay();
         updateWorldFileNameDisplay();
         updateStructureFileNameDisplay();
-        
         const extractStatusDiv = document.getElementById('extractStatus');
         if (extractStatusDiv.innerText === '' || extractStatusDiv.innerText === translations.zh.ready || extractStatusDiv.innerText === translations.en.ready) {
             extractStatusDiv.innerText = i18n.ready;
             extractStatusDiv.className = 'status';
         }
-        
         localStorage.setItem('preferredLang', lang);
     }
 
@@ -401,7 +379,6 @@
         }
     }
 
-    // ---------- 辅助函数 ----------
     async function flattenZip(originalBlob) {
         const zip = new JSZip();
         const originalZip = await zip.loadAsync(originalBlob);
@@ -412,7 +389,6 @@
             return true;
         });
         if (fileEntries.length === 0) return originalBlob;
-
         let commonPrefix = null;
         for (const name of fileEntries) {
             const lastSlash = name.lastIndexOf('/');
@@ -427,7 +403,6 @@
             }
         }
         if (!commonPrefix || commonPrefix === '') return originalBlob;
-
         const newZip = new JSZip();
         let added = 0;
         for (const name of fileEntries) {
@@ -470,7 +445,7 @@
         return String(key);
     }
 
-    // ---------- 提取结构功能 ----------
+    // ---------- 提取结构 ----------
     const extractFileInput = document.getElementById('extractFile');
     const extractFileBtn = document.getElementById('extractFileBtn');
     const extractFileNameSpan = document.getElementById('extractFileName');
@@ -479,9 +454,7 @@
 
     let extractSelectedFile = null;
 
-    extractFileBtn.addEventListener('click', () => {
-        extractFileInput.click();
-    });
+    extractFileBtn.addEventListener('click', () => extractFileInput.click());
     extractFileInput.addEventListener('change', (e) => {
         extractSelectedFile = e.target.files[0];
         updateExtractFileNameDisplay();
@@ -490,11 +463,7 @@
         extractStatusDiv.className = 'status';
     });
     function updateExtractFileNameDisplay() {
-        if (extractSelectedFile) {
-            extractFileNameSpan.innerText = extractSelectedFile.name;
-        } else {
-            extractFileNameSpan.innerText = i18n.noFileSelected;
-        }
+        extractFileNameSpan.innerText = extractSelectedFile ? extractSelectedFile.name : i18n.noFileSelected;
     }
 
     extractBtn.addEventListener('click', async () => {
@@ -507,14 +476,12 @@
             const normalizedBlob = await flattenZip(extractSelectedFile);
             extractStatusDiv.innerHTML += i18n.statusParsing + '<br>';
             const levelDb = await readMcworld(normalizedBlob);
-
             let entries = [];
             if (levelDb && typeof levelDb.entries === 'function') {
                 for await (const [key, value] of levelDb.entries()) entries.push({ key, value });
             } else if (levelDb && typeof levelDb === 'object') {
                 for (const key in levelDb) entries.push({ key, value: levelDb[key] });
             } else throw new Error('Cannot read LevelDB data.');
-
             extractStatusDiv.innerHTML += i18n.statusEntries.replace('{count}', entries.length) + '<br>';
             const targetPrefix = 'structuretemplate_mystructure:';
             const structures = [];
@@ -524,7 +491,6 @@
                     const name = keyStr.slice(targetPrefix.length);
                     const rawData = await valueToUint8Array(value);
                     const origKB = (rawData.byteLength / 1024).toFixed(2);
-                    // 检查是否为 GZip 压缩（前两个字节 0x1F 0x8B）
                     const isGzipped = rawData.length >= 2 && rawData[0] === 0x1F && rawData[1] === 0x8B;
                     const compressed = isGzipped ? rawData : pako.gzip(rawData);
                     const compKB = (compressed.byteLength / 1024).toFixed(2);
@@ -536,13 +502,11 @@
                 }
             }
             if (structures.length === 0) throw new Error(i18n.statusNoStructures.replace('{prefix}', targetPrefix));
-
             extractStatusDiv.innerHTML += i18n.statusPackaging.replace('{count}', structures.length) + '<br>';
             const zip = new JSZip();
             for (const { name, data } of structures) {
                 let safeName = name.replace(/[\\/:*?"<>|]/g, '_');
-                const fileName = `${safeName}.mcstructure`;
-                zip.file(fileName, data);
+                zip.file(`${safeName}.mcstructure`, data);
             }
             const zipBlob = await zip.generateAsync({ type: 'blob' });
             const url = URL.createObjectURL(zipBlob);
@@ -553,7 +517,6 @@
             autoLink.click();
             document.body.removeChild(autoLink);
             setTimeout(() => URL.revokeObjectURL(url), 10000);
-
             const downloadLink = document.createElement('a');
             downloadLink.href = url;
             downloadLink.download = 'structures.zip';
@@ -572,7 +535,7 @@
         }
     });
 
-    // ---------- 注入结构功能 ----------
+    // ---------- 注入结构 ----------
     const injectWorldFileInput = document.getElementById('injectWorldFile');
     const injectStructureFilesInput = document.getElementById('injectStructureFiles');
     const worldFileBtn = document.getElementById('worldFileBtn');
@@ -581,13 +544,12 @@
     const structureFileNameSpan = document.getElementById('structureFileName');
     const injectBtn = document.getElementById('injectBtn');
     const injectStatusDiv = document.getElementById('injectStatus');
+    const validationDiv = document.getElementById('structureValidationStatus');
 
     let injectWorldFile = null;
     let injectStructureFiles = [];
 
-    worldFileBtn.addEventListener('click', () => {
-        injectWorldFileInput.click();
-    });
+    worldFileBtn.addEventListener('click', () => injectWorldFileInput.click());
     injectWorldFileInput.addEventListener('change', (e) => {
         injectWorldFile = e.target.files[0];
         updateWorldFileNameDisplay();
@@ -596,16 +558,10 @@
         injectStatusDiv.className = 'status';
     });
     function updateWorldFileNameDisplay() {
-        if (injectWorldFile) {
-            worldFileNameSpan.innerText = injectWorldFile.name;
-        } else {
-            worldFileNameSpan.innerText = i18n.noFileSelected;
-        }
+        worldFileNameSpan.innerText = injectWorldFile ? injectWorldFile.name : i18n.noFileSelected;
     }
 
-    structureFileBtn.addEventListener('click', () => {
-        injectStructureFilesInput.click();
-    });
+    structureFileBtn.addEventListener('click', () => injectStructureFilesInput.click());
     injectStructureFilesInput.addEventListener('change', async (e) => {
         injectStructureFiles = Array.from(e.target.files);
         updateStructureFileNameDisplay();
@@ -625,7 +581,6 @@
     }
 
     async function validateStructures(files) {
-        const validationDiv = document.getElementById('structureValidationStatus');
         if (!files.length) {
             validationDiv.style.display = 'none';
             return;
@@ -637,10 +592,37 @@
         for (const file of files) {
             const arrayBuffer = await file.slice(0, 2).arrayBuffer();
             const bytes = new Uint8Array(arrayBuffer);
-            const isValid = bytes[0] === 0x1F && bytes[1] === 0x8B;
+            const isGzip = bytes[0] === 0x1F && bytes[1] === 0x8B;
             const sizeKB = (file.size / 1024).toFixed(2);
-            if (!isValid) allValid = false;
-            validationDiv.innerHTML += `${file.name}: ${isValid ? i18n.validStructure.replace('{size}', sizeKB) : (file.size < 100 ? i18n.structureTooSmall.replace('{size}', file.size) : i18n.invalidStructure)}<br>`;
+            if (!isGzip) allValid = false;
+            validationDiv.innerHTML += `${file.name}: ${isGzip ? i18n.validStructure.replace('{size}', sizeKB) : (file.size < 100 ? i18n.structureTooSmall.replace('{size}', file.size) : i18n.invalidStructure)}<br>`;
+            
+            // 如果文件是 GZip，尝试解压并显示前几个字节
+            if (isGzip) {
+                const fullBuffer = await file.arrayBuffer();
+                try {
+                    const decompressed = pako.ungzip(new Uint8Array(fullBuffer));
+                    const header = Array.from(decompressed.slice(0, 16)).map(b => b.toString(16).padStart(2,'0')).join(' ');
+                    validationDiv.innerHTML += `<span style="font-size:0.7rem;">  ${i18n.decompressedHeader}: ${header}<br>`;
+                    // 尝试提取 NBT 根标签名（复合标签以 0x0A 开头，后跟字符串长度）
+                    let rootName = '未知';
+                    if (decompressed.length > 3 && decompressed[0] === 0x0A) {
+                        const nameLen = decompressed[1];
+                        if (decompressed.length > 2 + nameLen) {
+                            rootName = new TextDecoder().decode(decompressed.slice(2, 2 + nameLen));
+                        }
+                    }
+                    validationDiv.innerHTML += `  ${i18n.nbtRootHint} "${rootName}"<br>`;
+                    if (rootName === 'structure' || decompressed.includes('block_palette') || decompressed.includes('size')) {
+                        validationDiv.innerHTML += `  ✅ ${i18n.likelyValid}<br>`;
+                    } else {
+                        validationDiv.innerHTML += `  ⚠️ ${i18n.likelyInvalid}<br>`;
+                    }
+                } catch (e) {
+                    validationDiv.innerHTML += `  ❌ 解压失败: ${e.message}<br>`;
+                    allValid = false;
+                }
+            }
         }
         validationDiv.className = allValid ? 'status success' : 'status warning';
     }
@@ -751,7 +733,7 @@
         }
     });
 
-    // ---------- 初始化语言和UI ----------
+    // 初始化
     (async () => {
         let preferred = localStorage.getItem('preferredLang');
         if (preferred && (preferred === 'zh' || preferred === 'en')) {
