@@ -237,6 +237,7 @@
 <script type="module">
     import { readMcworld } from "https://esm.sh/mcbe-leveldb-reader";
     import JSZip from "https://esm.sh/jszip";
+    import pako from "https://esm.sh/pako";
 
     // ---------- 多语言资源 ----------
     const translations = {
@@ -257,7 +258,7 @@
             statusFlatten: "检查并修复嵌套目录...",
             statusParsing: "正在解析 LevelDB 数据库...",
             statusEntries: "共读取到 {count} 个键值对。",
-            statusFound: "找到结构：{name} ({size} KB)",
+            statusFound: "找到结构：{name} (原大小 {orig} KB → 压缩后 {comp} KB)",
             statusNoStructures: "未找到任何以 \"{prefix}\" 开头的键。请确认您保存的结构名称包含 \"mystructure:\" 前缀（例如 /structure save mystructure:建筑名）。",
             statusPackaging: "共找到 {count} 个结构，正在打包...",
             statusSuccessExtract: "提取成功！共 {count} 个结构。",
@@ -298,7 +299,7 @@
             statusFlatten: "Checking and fixing nested directories...",
             statusParsing: "Parsing LevelDB database...",
             statusEntries: "Read {count} key-value pairs.",
-            statusFound: "Found structure: {name} ({size} KB)",
+            statusFound: "Found structure: {name} (raw {orig} KB → compressed {comp} KB)",
             statusNoStructures: "No keys starting with \"{prefix}\" found. Please ensure your structures are saved with the \"mystructure:\" prefix (e.g. /structure save mystructure:building).",
             statusPackaging: "Found {count} structures, packaging...",
             statusSuccessExtract: "Extraction successful! {count} structures.",
@@ -400,69 +401,7 @@
         }
     }
 
-    // ---------- 验证 .mcstructure 文件（检查 GZip 头）----------
-    async function validateStructureFile(file) {
-        if (!file) return null;
-        const arrayBuffer = await file.slice(0, 2).arrayBuffer();
-        const bytes = new Uint8Array(arrayBuffer);
-        const isValid = bytes[0] === 0x1F && bytes[1] === 0x8B;
-        const sizeKB = (file.size / 1024).toFixed(2);
-        return {
-            name: file.name,
-            size: file.size,
-            sizeKB: sizeKB,
-            valid: isValid && file.size > 100,
-            message: isValid ? (file.size > 100 ? i18n.validStructure.replace('{size}', sizeKB) : i18n.structureTooSmall.replace('{size}', file.size)) : i18n.invalidStructure
-        };
-    }
-
-    // 验证多个结构文件并显示结果
-    async function validateStructures(files) {
-        const validationDiv = document.getElementById('structureValidationStatus');
-        if (!files.length) {
-            validationDiv.style.display = 'none';
-            return;
-        }
-        validationDiv.style.display = 'block';
-        validationDiv.innerHTML = i18n.validateStructures + '<br>';
-        validationDiv.className = 'status info';
-        let allValid = true;
-        for (const file of files) {
-            const result = await validateStructureFile(file);
-            if (!result.valid) allValid = false;
-            validationDiv.innerHTML += `${result.name}: ${result.message}<br>`;
-        }
-        validationDiv.className = allValid ? 'status success' : 'status warning';
-        return allValid;
-    }
-
-    // ---------- 提取结构功能 ----------
-    const extractFileInput = document.getElementById('extractFile');
-    const extractFileBtn = document.getElementById('extractFileBtn');
-    const extractFileNameSpan = document.getElementById('extractFileName');
-    const extractBtn = document.getElementById('extractBtn');
-    const extractStatusDiv = document.getElementById('extractStatus');
-
-    let extractSelectedFile = null;
-
-    extractFileBtn.addEventListener('click', () => {
-        extractFileInput.click();
-    });
-    extractFileInput.addEventListener('change', (e) => {
-        extractSelectedFile = e.target.files[0];
-        updateExtractFileNameDisplay();
-        extractBtn.disabled = !extractSelectedFile;
-        extractStatusDiv.innerHTML = '';
-        extractStatusDiv.className = 'status';
-    });
-    function updateExtractFileNameDisplay() {
-        if (extractSelectedFile) {
-            extractFileNameSpan.innerText = extractSelectedFile.name;
-        } else {
-            extractFileNameSpan.innerText = i18n.noFileSelected;
-        }
-    }
-
+    // ---------- 辅助函数 ----------
     async function flattenZip(originalBlob) {
         const zip = new JSZip();
         const originalZip = await zip.loadAsync(originalBlob);
@@ -531,6 +470,33 @@
         return String(key);
     }
 
+    // ---------- 提取结构功能 ----------
+    const extractFileInput = document.getElementById('extractFile');
+    const extractFileBtn = document.getElementById('extractFileBtn');
+    const extractFileNameSpan = document.getElementById('extractFileName');
+    const extractBtn = document.getElementById('extractBtn');
+    const extractStatusDiv = document.getElementById('extractStatus');
+
+    let extractSelectedFile = null;
+
+    extractFileBtn.addEventListener('click', () => {
+        extractFileInput.click();
+    });
+    extractFileInput.addEventListener('change', (e) => {
+        extractSelectedFile = e.target.files[0];
+        updateExtractFileNameDisplay();
+        extractBtn.disabled = !extractSelectedFile;
+        extractStatusDiv.innerHTML = '';
+        extractStatusDiv.className = 'status';
+    });
+    function updateExtractFileNameDisplay() {
+        if (extractSelectedFile) {
+            extractFileNameSpan.innerText = extractSelectedFile.name;
+        } else {
+            extractFileNameSpan.innerText = i18n.noFileSelected;
+        }
+    }
+
     extractBtn.addEventListener('click', async () => {
         if (!extractSelectedFile) return;
         extractBtn.disabled = true;
@@ -556,10 +522,17 @@
                 const keyStr = keyToString(key);
                 if (keyStr.startsWith(targetPrefix)) {
                     const name = keyStr.slice(targetPrefix.length);
-                    const data = await valueToUint8Array(value);
-                    const sizeKB = (data.byteLength / 1024).toFixed(2);
-                    structures.push({ name, data, sizeKB });
-                    extractStatusDiv.innerHTML += i18n.statusFound.replace('{name}', name).replace('{size}', sizeKB) + '<br>';
+                    const rawData = await valueToUint8Array(value);
+                    const origKB = (rawData.byteLength / 1024).toFixed(2);
+                    // 检查是否为 GZip 压缩（前两个字节 0x1F 0x8B）
+                    const isGzipped = rawData.length >= 2 && rawData[0] === 0x1F && rawData[1] === 0x8B;
+                    const compressed = isGzipped ? rawData : pako.gzip(rawData);
+                    const compKB = (compressed.byteLength / 1024).toFixed(2);
+                    structures.push({ name, data: compressed, sizeKB: compKB });
+                    extractStatusDiv.innerHTML += i18n.statusFound
+                        .replace('{name}', name)
+                        .replace('{orig}', origKB)
+                        .replace('{comp}', compKB) + '<br>';
                 }
             }
             if (structures.length === 0) throw new Error(i18n.statusNoStructures.replace('{prefix}', targetPrefix));
@@ -639,7 +612,6 @@
         updateInjectButton();
         injectStatusDiv.innerHTML = '';
         injectStatusDiv.className = 'status';
-        // 验证上传的结构文件
         await validateStructures(injectStructureFiles);
     });
     function updateStructureFileNameDisplay() {
@@ -650,6 +622,27 @@
         } else {
             structureFileNameSpan.innerText = i18n.filesSelected.replace('{count}', injectStructureFiles.length);
         }
+    }
+
+    async function validateStructures(files) {
+        const validationDiv = document.getElementById('structureValidationStatus');
+        if (!files.length) {
+            validationDiv.style.display = 'none';
+            return;
+        }
+        validationDiv.style.display = 'block';
+        validationDiv.innerHTML = i18n.validateStructures + '<br>';
+        validationDiv.className = 'status info';
+        let allValid = true;
+        for (const file of files) {
+            const arrayBuffer = await file.slice(0, 2).arrayBuffer();
+            const bytes = new Uint8Array(arrayBuffer);
+            const isValid = bytes[0] === 0x1F && bytes[1] === 0x8B;
+            const sizeKB = (file.size / 1024).toFixed(2);
+            if (!isValid) allValid = false;
+            validationDiv.innerHTML += `${file.name}: ${isValid ? i18n.validStructure.replace('{size}', sizeKB) : (file.size < 100 ? i18n.structureTooSmall.replace('{size}', file.size) : i18n.invalidStructure)}<br>`;
+        }
+        validationDiv.className = allValid ? 'status success' : 'status warning';
     }
 
     function updateInjectButton() {
@@ -698,7 +691,6 @@
         const zip = new JSZip();
         const worldZip = await zip.loadAsync(worldZipBlob);
         const behaviorPacksFolder = worldZip.folder('behavior_packs');
-        // 解压行为包并放入 behavior_packs/imported_structures_pack/
         const packZip = new JSZip();
         const unpacked = await packZip.loadAsync(behaviorPackBlob);
         const targetFolder = behaviorPacksFolder.folder('imported_structures_pack');
@@ -707,7 +699,6 @@
             const data = await file.async('uint8array');
             targetFolder.file(path, data);
         }
-        // 更新 world_behavior_packs.json
         let behaviorPacks = [];
         if (worldZip.files['world_behavior_packs.json']) {
             const content = await worldZip.files['world_behavior_packs.json'].async('string');
@@ -769,10 +760,11 @@
             const detected = await detectLanguageByIP();
             applyLanguage(detected);
         }
+        const extractStatusDiv = document.getElementById('extractStatus');
         extractStatusDiv.innerHTML = i18n.ready;
         extractStatusDiv.className = 'status';
-        injectStatusDiv.innerHTML = '';
-        injectStatusDiv.className = 'status';
+        document.getElementById('injectStatus').innerHTML = '';
+        document.getElementById('injectStatus').className = 'status';
         extractBtn.disabled = true;
         injectBtn.disabled = true;
         updateExtractFileNameDisplay();
