@@ -143,6 +143,11 @@
             color: #b71c1c;
             border-left: 4px solid #d32f2f;
         }
+        .warning {
+            background: #fff3e0;
+            color: #e65100;
+            border-left: 4px solid #ff9800;
+        }
         .download-link {
             display: inline-block;
             margin-top: 12px;
@@ -157,6 +162,21 @@
             font-size: 0.75rem;
             color: #666;
             margin-top: 8px;
+        }
+        .structure-list {
+            margin-top: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+            background: #f5f5f5;
+            border-radius: 12px;
+            padding: 8px;
+            font-size: 0.8rem;
+        }
+        .structure-item {
+            padding: 4px 8px;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            justify-content: space-between;
         }
     </style>
 </head>
@@ -207,6 +227,7 @@
                 <input type="file" id="injectStructureFiles" accept=".mcstructure" multiple style="display:none;">
             </div>
         </div>
+        <div id="structureValidationStatus" class="status" style="display:none;"></div>
         <button id="injectBtn" disabled>植入并下载新世界</button>
         <div id="injectStatus" class="status"></div>
         <div id="injectNote" class="small-note">生成的新世界将包含一个名为“Imported Structures”的行为包，其中包含您上传的结构。</div>
@@ -236,7 +257,7 @@
             statusFlatten: "检查并修复嵌套目录...",
             statusParsing: "正在解析 LevelDB 数据库...",
             statusEntries: "共读取到 {count} 个键值对。",
-            statusFound: "找到结构：{name}",
+            statusFound: "找到结构：{name} ({size} KB)",
             statusNoStructures: "未找到任何以 \"{prefix}\" 开头的键。请确认您保存的结构名称包含 \"mystructure:\" 前缀（例如 /structure save mystructure:建筑名）。",
             statusPackaging: "共找到 {count} 个结构，正在打包...",
             statusSuccessExtract: "提取成功！共 {count} 个结构。",
@@ -254,7 +275,11 @@
             injectInvalidWorld: "世界文件无效或无法解压。",
             selectFile: "选择文件",
             noFileSelected: "未选择文件",
-            filesSelected: "已选择 {count} 个文件"
+            filesSelected: "已选择 {count} 个文件",
+            validateStructures: "正在验证结构文件...",
+            validStructure: "有效，GZip 压缩 NBT，大小 {size} KB",
+            invalidStructure: "无效，文件头不是 GZip 格式，可能损坏",
+            structureTooSmall: "文件过小 ({size} 字节)，可能损坏"
         },
         en: {
             toggleBtn: "中文",
@@ -273,7 +298,7 @@
             statusFlatten: "Checking and fixing nested directories...",
             statusParsing: "Parsing LevelDB database...",
             statusEntries: "Read {count} key-value pairs.",
-            statusFound: "Found structure: {name}",
+            statusFound: "Found structure: {name} ({size} KB)",
             statusNoStructures: "No keys starting with \"{prefix}\" found. Please ensure your structures are saved with the \"mystructure:\" prefix (e.g. /structure save mystructure:building).",
             statusPackaging: "Found {count} structures, packaging...",
             statusSuccessExtract: "Extraction successful! {count} structures.",
@@ -291,7 +316,11 @@
             injectInvalidWorld: "Invalid world file or cannot be unzipped.",
             selectFile: "Select File",
             noFileSelected: "No file selected",
-            filesSelected: "{count} files selected"
+            filesSelected: "{count} files selected",
+            validateStructures: "Validating structure files...",
+            validStructure: "Valid, GZip compressed NBT, size {size} KB",
+            invalidStructure: "Invalid, file header not GZip, possibly corrupted",
+            structureTooSmall: "File too small ({size} bytes), possibly corrupted"
         }
     };
 
@@ -369,6 +398,42 @@
             document.getElementById('tabInject').classList.add('active');
             document.getElementById('tabInjectBtn').classList.add('active');
         }
+    }
+
+    // ---------- 验证 .mcstructure 文件（检查 GZip 头）----------
+    async function validateStructureFile(file) {
+        if (!file) return null;
+        const arrayBuffer = await file.slice(0, 2).arrayBuffer();
+        const bytes = new Uint8Array(arrayBuffer);
+        const isValid = bytes[0] === 0x1F && bytes[1] === 0x8B;
+        const sizeKB = (file.size / 1024).toFixed(2);
+        return {
+            name: file.name,
+            size: file.size,
+            sizeKB: sizeKB,
+            valid: isValid && file.size > 100,
+            message: isValid ? (file.size > 100 ? i18n.validStructure.replace('{size}', sizeKB) : i18n.structureTooSmall.replace('{size}', file.size)) : i18n.invalidStructure
+        };
+    }
+
+    // 验证多个结构文件并显示结果
+    async function validateStructures(files) {
+        const validationDiv = document.getElementById('structureValidationStatus');
+        if (!files.length) {
+            validationDiv.style.display = 'none';
+            return;
+        }
+        validationDiv.style.display = 'block';
+        validationDiv.innerHTML = i18n.validateStructures + '<br>';
+        validationDiv.className = 'status info';
+        let allValid = true;
+        for (const file of files) {
+            const result = await validateStructureFile(file);
+            if (!result.valid) allValid = false;
+            validationDiv.innerHTML += `${result.name}: ${result.message}<br>`;
+        }
+        validationDiv.className = allValid ? 'status success' : 'status warning';
+        return allValid;
     }
 
     // ---------- 提取结构功能 ----------
@@ -490,19 +555,21 @@
             for (const { key, value } of entries) {
                 const keyStr = keyToString(key);
                 if (keyStr.startsWith(targetPrefix)) {
-                    structures.push({ key: keyStr, value });
-                    extractStatusDiv.innerHTML += i18n.statusFound.replace('{name}', keyStr.slice(targetPrefix.length)) + '<br>';
+                    const name = keyStr.slice(targetPrefix.length);
+                    const data = await valueToUint8Array(value);
+                    const sizeKB = (data.byteLength / 1024).toFixed(2);
+                    structures.push({ name, data, sizeKB });
+                    extractStatusDiv.innerHTML += i18n.statusFound.replace('{name}', name).replace('{size}', sizeKB) + '<br>';
                 }
             }
             if (structures.length === 0) throw new Error(i18n.statusNoStructures.replace('{prefix}', targetPrefix));
 
             extractStatusDiv.innerHTML += i18n.statusPackaging.replace('{count}', structures.length) + '<br>';
             const zip = new JSZip();
-            for (const { key, value } of structures) {
-                let name = key.slice(targetPrefix.length).replace(/[\\/:*?"<>|]/g, '_');
-                const fileName = `${name}.mcstructure`;
-                const binaryData = await valueToUint8Array(value);
-                zip.file(fileName, binaryData);
+            for (const { name, data } of structures) {
+                let safeName = name.replace(/[\\/:*?"<>|]/g, '_');
+                const fileName = `${safeName}.mcstructure`;
+                zip.file(fileName, data);
             }
             const zipBlob = await zip.generateAsync({ type: 'blob' });
             const url = URL.createObjectURL(zipBlob);
@@ -566,12 +633,14 @@
     structureFileBtn.addEventListener('click', () => {
         injectStructureFilesInput.click();
     });
-    injectStructureFilesInput.addEventListener('change', (e) => {
+    injectStructureFilesInput.addEventListener('change', async (e) => {
         injectStructureFiles = Array.from(e.target.files);
         updateStructureFileNameDisplay();
         updateInjectButton();
         injectStatusDiv.innerHTML = '';
         injectStatusDiv.className = 'status';
+        // 验证上传的结构文件
+        await validateStructures(injectStructureFiles);
     });
     function updateStructureFileNameDisplay() {
         if (injectStructureFiles.length === 0) {
@@ -595,7 +664,6 @@
         });
     }
 
-    // 创建行为包，返回 { blob, uuid, version }
     async function createBehaviorPack(structureFiles) {
         const packZip = new JSZip();
         const manifestUUID = generateUUID();
